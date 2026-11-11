@@ -1,7 +1,7 @@
 // Vercel Serverless Function: keeps your Gemini API key secret on the server.
 // Set GEMINI_API_KEY in Vercel > Project Settings > Environment Variables.
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 
 const PROMPT = `You are a nutrition expert. Analyze the food in this image.
 - If the image does not contain food or drink, set isFood to false and fill other fields with zeros/empty strings.
