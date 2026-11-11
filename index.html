@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#10b981">
+<title>NutriSnap - Food Nutrition Analyzer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', sans-serif; background:#f3f4f6; -webkit-tap-highlight-color: transparent; }
+  .fade-in { animation: fadeIn .3s ease-in-out; }
+  @keyframes fadeIn { from {opacity:0; transform:translateY(10px)} to {opacity:1; transform:none} }
+  .loader { border:4px solid #e5e7eb; border-top-color:#10b981; border-radius:50%; width:40px; height:40px; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  .bar { transition: width .8s ease; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body class="text-gray-800 antialiased h-screen flex justify-center overflow-hidden">
+
+<div class="w-full max-w-md h-full bg-gray-50 flex flex-col relative shadow-2xl overflow-y-auto" id="app">
+
+  <header class="bg-white px-6 py-4 shadow-sm sticky top-0 z-10 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center text-lg">🥗</div>
+      <h1 class="font-bold text-xl text-gray-900 tracking-tight">NutriSnap</h1>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="historyBtn" class="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-1.5 rounded-full">History</button>
+      <button id="resetBtn" class="hidden text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full">Start Over</button>
+    </div>
+  </header>
+
+  <main class="flex-1 p-6 flex flex-col gap-5">
+
+    <!-- Intro + upload -->
+    <div id="introSection" class="text-center mt-2">
+      <h2 class="text-2xl font-bold text-gray-800 mb-2">Analyze Your Food</h2>
+      <p class="text-gray-500 text-sm">Snap or upload a photo of your meal to get calories, macros and a health score.</p>
+    </div>
+
+    <div id="uploadSection" class="flex flex-col gap-3">
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" class="hidden">
+      <input type="file" id="galleryInput" accept="image/*" class="hidden">
+
+      <label id="dropZone" for="cameraInput" class="w-full aspect-square border-2 border-dashed border-gray-300 rounded-3xl flex flex-col items-center justify-center cursor-pointer bg-white hover:bg-gray-50 transition-colors">
+        <div class="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-4 text-3xl">📷</div>
+        <span class="font-semibold text-gray-700">Tap to take a photo</span>
+        <span class="text-xs text-gray-400 mt-1">or drop an image here</span>
+      </label>
+      <label for="galleryInput" class="w-full text-center bg-white border border-gray-200 text-gray-700 font-semibold py-3 rounded-2xl cursor-pointer hover:bg-gray-50">
+        🖼️ Choose from gallery
+      </label>
+    </div>
+
+    <!-- Preview -->
+    <div id="previewSection" class="hidden flex-col gap-4 fade-in">
+      <div class="relative w-full rounded-3xl overflow-hidden shadow-md bg-black aspect-square">
+        <img id="imagePreview" src="" alt="Food preview" class="w-full h-full object-cover">
+      </div>
+      <button id="analyzeBtn" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold py-4 rounded-2xl shadow-lg shadow-emerald-200 transition-all active:scale-95">
+        Analyze Nutrition
+      </button>
+    </div>
+
+    <!-- Error -->
+    <div id="errorBox" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl" role="alert">
+      <strong class="font-bold">Oops!</strong>
+      <span id="errorMessage" class="block text-sm mt-0.5"></span>
+      <button id="retryBtn" class="mt-2 text-sm font-semibold underline">Try again</button>
+    </div>
+
+    <!-- Results -->
+    <div id="resultsSection" class="hidden flex-col gap-4 pb-8 fade-in">
+      <img id="resultThumb" alt="" class="w-full h-48 object-cover rounded-3xl shadow-md">
+
+      <div class="text-center">
+        <h2 id="resultFoodName" class="text-2xl font-bold text-gray-900 capitalize"></h2>
+        <p id="resultServing" class="text-xs text-gray-400 mt-0.5"></p>
+        <p id="resultExplanation" class="text-sm text-gray-500 mt-2"></p>
+      </div>
+
+      <!-- Health score -->
+      <div class="bg-white rounded-2xl p-4 shadow-sm flex items-center gap-4">
+        <div id="scoreCircle" class="w-16 h-16 rounded-full flex items-center justify-center text-white text-2xl font-bold shrink-0"></div>
+        <div class="min-w-0">
+          <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Health score</div>
+          <div id="scoreLabel" class="font-bold text-gray-800"></div>
+          <div id="confidence" class="text-xs text-gray-400"></div>
+        </div>
+      </div>
+
+      <div id="tags" class="flex flex-wrap gap-2 justify-center"></div>
+
+      <!-- Calories + macros -->
+      <div class="bg-white rounded-2xl p-5 shadow-sm">
+        <div class="flex items-baseline justify-center gap-1">
+          <span id="resultCalories" class="text-4xl font-bold text-gray-900">0</span>
+          <span class="text-sm text-gray-400">kcal</span>
+        </div>
+        <div id="macroBar" class="flex h-3 rounded-full overflow-hidden mt-4 bg-gray-100"></div>
+        <div class="grid grid-cols-3 gap-2 mt-4 text-center">
+          <div><div class="text-xs text-gray-500">Protein</div><div class="font-bold"><span id="resultProtein">0</span>g</div><div class="h-1 rounded bg-red-400 mt-1"></div></div>
+          <div><div class="text-xs text-gray-500">Carbs</div><div class="font-bold"><span id="resultCarbs">0</span>g</div><div class="h-1 rounded bg-yellow-400 mt-1"></div></div>
+          <div><div class="text-xs text-gray-500">Fat</div><div class="font-bold"><span id="resultFat">0</span>g</div><div class="h-1 rounded bg-blue-400 mt-1"></div></div>
+        </div>
+      </div>
+
+      <!-- Extra nutrients -->
+      <div class="grid grid-cols-3 gap-3">
+        <div class="bg-white rounded-2xl p-3 shadow-sm text-center"><div class="text-xs text-gray-500">Fiber</div><div class="font-bold"><span id="resultFiber">0</span>g</div></div>
+        <div class="bg-white rounded-2xl p-3 shadow-sm text-center"><div class="text-xs text-gray-500">Sugar</div><div class="font-bold"><span id="resultSugar">0</span>g</div></div>
+        <div class="bg-white rounded-2xl p-3 shadow-sm text-center"><div class="text-xs text-gray-500">Sodium</div><div class="font-bold"><span id="resultSodium">0</span>mg</div></div>
+      </div>
+
+      <!-- Items -->
+      <div id="itemsCard" class="bg-white rounded-2xl p-4 shadow-sm">
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">What I spotted</div>
+        <ul id="itemsList" class="divide-y divide-gray-100 text-sm"></ul>
+      </div>
+
+      <!-- Tip -->
+      <div class="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-2xl p-4 text-white shadow-md">
+        <div class="text-xs font-semibold uppercase tracking-wide opacity-90">Tip</div>
+        <p id="resultTip" class="font-medium mt-0.5"></p>
+      </div>
+
+      <p class="text-[11px] text-gray-400 text-center">Values are AI estimates from a photo, not medical advice.</p>
+      <button id="againBtn" class="w-full bg-white border border-gray-200 text-gray-700 font-semibold py-3 rounded-2xl">Analyze another meal</button>
+    </div>
+
+    <!-- History -->
+    <div id="historySection" class="hidden flex-col gap-3 pb-8 fade-in">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xl font-bold">Recent meals</h2>
+        <div class="flex gap-2">
+          <button id="clearHistoryBtn" class="text-sm text-red-500 font-medium">Clear</button>
+          <button id="closeHistoryBtn" class="text-sm text-emerald-600 font-medium">Close</button>
+        </div>
+      </div>
+      <div id="historyTotal" class="text-sm text-gray-500"></div>
+      <ul id="historyList" class="flex flex-col gap-2"></ul>
+    </div>
+  </main>
+
+  <!-- Loading -->
+  <div id="loadingOverlay" class="hidden absolute inset-0 bg-white/85 backdrop-blur-sm z-20 flex flex-col items-center justify-center">
+    <div class="loader mb-4"></div>
+    <h3 class="font-semibold text-lg text-gray-800">Analyzing food...</h3>
+    <p id="loadingText" class="text-sm text-gray-500 text-center px-8 mt-2">Identifying your meal</p>
+  </div>
+</div>
+
+<script>
+  const API_ENDPOINT = '/api/analyze';
+  const MAX_SIDE = 640;           // resize big phone photos so uploads stay fast and under size limits
+  const HISTORY_KEY = 'nutrisnap_history_v1';
+
+  const $ = id => document.getElementById(id);
+  const els = {
+    cameraInput: $('cameraInput'), galleryInput: $('galleryInput'), dropZone: $('dropZone'),
+    intro: $('introSection'), upload: $('uploadSection'), preview: $('previewSection'),
+    img: $('imagePreview'), analyze: $('analyzeBtn'), loading: $('loadingOverlay'), loadingText: $('loadingText'),
+    results: $('resultsSection'), reset: $('resetBtn'), errorBox: $('errorBox'), errorMsg: $('errorMessage'),
+    history: $('historySection'), historyBtn: $('historyBtn')
+  };
+
+  let current = { base64: null, mime: 'image/jpeg', dataUrl: null };
+
+  const show = (el, flex) => { el.classList.remove('hidden'); if (flex) el.classList.add('flex'); };
+  const hide = el => { el.classList.add('hidden'); el.classList.remove('flex'); };
+
+  /* ---------- Image handling ---------- */
+  function loadFile(file) {
+    if (!file) return;
+    hide(els.errorBox);
+    // Convert anything (HEIC from iPhone, PNG, WebP...) to a resized JPEG via canvas.
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      let { width: w, height: h } = img;
+      const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+      w = Math.round(w * scale); h = Math.round(h * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      URL.revokeObjectURL(url);
+      current = { base64: dataUrl.split(',')[1], mime: 'image/jpeg', dataUrl };
+      els.img.src = dataUrl;
+      hide(els.intro); hide(els.upload); hide(els.results); hide(els.history);
+      show(els.preview, true); show(els.reset);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      showError("That image format couldn't be read. Try a JPG or PNG photo.");
+    };
+    img.src = url;
+  }
+
+  [els.cameraInput, els.galleryInput].forEach(inp =>
+    inp.addEventListener('change', e => { loadFile(e.target.files[0]); inp.value = ''; }));
+
+  // drag & drop (desktop)
+  ['dragover', 'dragenter'].forEach(ev => els.dropZone.addEventListener(ev, e => { e.preventDefault(); els.dropZone.classList.add('bg-emerald-50'); }));
+  ['dragleave', 'drop'].forEach(ev => els.dropZone.addEventListener(ev, e => { e.preventDefault(); els.dropZone.classList.remove('bg-emerald-50'); }));
+  els.dropZone.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+
+  function resetApp() {
+    current = { base64: null, mime: 'image/jpeg', dataUrl: null };
+    hide(els.preview); hide(els.results); hide(els.loading); hide(els.reset); hide(els.errorBox); hide(els.history);
+    show(els.intro); show(els.upload);
+  }
+  els.reset.addEventListener('click', resetApp);
+  $('againBtn').addEventListener('click', resetApp);
+
+  function showError(msg) { els.errorMsg.textContent = msg; show(els.errorBox); }
+  $('retryBtn').addEventListener('click', () => { hide(els.errorBox); if (current.base64) analyze(); });
+
+  /* ---------- Analyze ---------- */
+  els.analyze.addEventListener('click', analyze);
+
+  async function analyze() {
+    if (!current.base64) return;
+    hide(els.errorBox); show(els.loading, true);
+    const msgs = ['Identifying your meal', 'Estimating portion size', 'Calculating nutrition'];
+    let i = 0;
+    els.loadingText.textContent = msgs[0];
+    const timer = setInterval(() => { i = (i + 1) % msgs.length; els.loadingText.textContent = msgs[i]; }, 1800);
+
+    try {
+      const data = await fetchNutrition();
+      if (!data.isFood) {
+        showError("I couldn't find food in that photo. Try a clearer, closer shot of your meal.");
+        return;
+      }
+      renderResults(data);
+      saveHistory(data);
+      hide(els.preview); show(els.results, true);
+      $('app').scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      console.error(err);
+      showError(err.message || 'Failed to analyze the image. Please try again.');
+    } finally {
+      clearInterval(timer); hide(els.loading);
+    }
+  }
+
+  async function fetchNutrition() {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 45000);
+    let res;
+    try {
+      res = await fetch(API_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: current.base64, mimeType: current.mime }),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      throw new Error(e.name === 'AbortError' ? 'The request took too long. Please try again.' : 'Network problem. Check your connection and try again.');
+    } finally { clearTimeout(t); }
+
+    if (res.status === 404) throw new Error('The analysis function was not found. Make sure you deployed the whole folder (including the api folder).');
+    let body = {};
+    try { body = await res.json(); } catch {}
+    if (!res.ok) throw new Error(body.error || `Server error (${res.status}).`);
+    return body;
+  }
+
+  /* ---------- Render ---------- */
+  const n = v => Number.isFinite(+v) ? Math.round(+v) : 0;
+
+  function renderResults(d) {
+    $('resultThumb').src = current.dataUrl;
+    $('resultFoodName').textContent = d.foodName || 'Unknown food';
+    $('resultServing').textContent = d.servingSize ? `Serving: ${d.servingSize}` : '';
+    $('resultExplanation').textContent = d.explanation || '';
+    $('resultTip').textContent = d.tip || 'Enjoy in moderation and balance with veggies.';
+
+    const score = Math.min(10, Math.max(1, n(d.healthScore) || 5));
+    const circle = $('scoreCircle');
+    circle.textContent = score;
+    circle.style.background = score >= 7 ? '#10b981' : score >= 4 ? '#f59e0b' : '#ef4444';
+    $('scoreLabel').textContent = score >= 7 ? 'Nutritious choice' : score >= 4 ? 'Okay in moderation' : 'Treat food';
+    $('confidence').textContent = d.confidence ? `Estimate confidence: ${d.confidence}` : '';
+
+    const tags = $('tags'); tags.innerHTML = '';
+    (d.dietaryTags || []).slice(0, 5).forEach(t => {
+      const s = document.createElement('span');
+      s.className = 'bg-emerald-50 text-emerald-700 text-xs font-semibold px-3 py-1 rounded-full';
+      s.textContent = t; tags.appendChild(s);
+    });
+
+    const p = n(d.protein), c = n(d.carbs), f = n(d.fat);
+    $('resultCalories').textContent = n(d.calories);
+    $('resultProtein').textContent = p; $('resultCarbs').textContent = c; $('resultFat').textContent = f;
+    $('resultFiber').textContent = n(d.fiber); $('resultSugar').textContent = n(d.sugar); $('resultSodium').textContent = n(d.sodium);
+
+    const total = p + c + f || 1;
+    $('macroBar').innerHTML =
+      `<div class="bar bg-red-400" style="width:${p / total * 100}%"></div>` +
+      `<div class="bar bg-yellow-400" style="width:${c / total * 100}%"></div>` +
+      `<div class="bar bg-blue-400" style="width:${f / total * 100}%"></div>`;
+
+    const list = $('itemsList'); list.innerHTML = '';
+    const items = d.items || [];
+    $('itemsCard').classList.toggle('hidden', !items.length);
+    items.forEach(it => {
+      const li = document.createElement('li');
+      li.className = 'flex justify-between py-2';
+      const a = document.createElement('span'); a.textContent = it.name;
+      const b = document.createElement('span'); b.className = 'text-gray-400'; b.textContent = `${n(it.calories)} kcal`;
+      li.append(a, b); list.appendChild(li);
+    });
+  }
+
+  /* ---------- History (stored on this device only) ---------- */
+  function loadHistory() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; }
+  }
+  function saveHistory(d) {
+    try {
+      // tiny thumbnail to keep storage small
+      const c = document.createElement('canvas'); c.width = 96; c.height = 96;
+      const im = new Image();
+      im.onload = () => {
+        const s = Math.max(96 / im.width, 96 / im.height);
+        c.getContext('2d').drawImage(im, (96 - im.width * s) / 2, (96 - im.height * s) / 2, im.width * s, im.height * s);
+        const list = loadHistory();
+        list.unshift({ t: Date.now(), name: d.foodName, kcal: n(d.calories), p: n(d.protein), c: n(d.carbs), f: n(d.fat), thumb: c.toDataURL('image/jpeg', 0.6) });
+        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 30))); } catch {}
+      };
+      im.src = current.dataUrl;
+    } catch {}
+  }
+  function renderHistory() {
+    const list = loadHistory(); const ul = $('historyList'); ul.innerHTML = '';
+    const today = list.filter(x => new Date(x.t).toDateString() === new Date().toDateString());
+    $('historyTotal').textContent = today.length
+      ? `Today: ${today.reduce((s, x) => s + x.kcal, 0)} kcal across ${today.length} meal${today.length > 1 ? 's' : ''}`
+      : (list.length ? '' : 'No meals yet. Analyze one to start your log.');
+    list.forEach(x => {
+      const li = document.createElement('li');
+      li.className = 'bg-white rounded-2xl p-3 shadow-sm flex items-center gap-3';
+      const im = document.createElement('img'); im.src = x.thumb; im.className = 'w-14 h-14 rounded-xl object-cover';
+      const box = document.createElement('div'); box.className = 'min-w-0 flex-1';
+      const nm = document.createElement('div'); nm.className = 'font-semibold truncate capitalize'; nm.textContent = x.name;
+      const sub = document.createElement('div'); sub.className = 'text-xs text-gray-400';
+      sub.textContent = `${x.kcal} kcal · P ${x.p}g · C ${x.c}g · F ${x.f}g · ${new Date(x.t).toLocaleDateString()}`;
+      box.append(nm, sub); li.append(im, box); ul.appendChild(li);
+    });
+  }
+  els.historyBtn.addEventListener('click', () => {
+    renderHistory();
+    hide(els.intro); hide(els.upload); hide(els.preview); hide(els.results); hide(els.errorBox);
+    show(els.history, true); show(els.reset);
+  });
+  $('closeHistoryBtn').addEventListener('click', resetApp);
+  $('clearHistoryBtn').addEventListener('click', () => { try { localStorage.removeItem(HISTORY_KEY); } catch {} renderHistory(); });
+</script>
+</body>
+</html>
