@@ -1,7 +1,10 @@
 // Vercel Serverless Function: keeps your Gemini API key secret on the server.
 // Set GEMINI_API_KEY in Vercel > Project Settings > Environment Variables.
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
+const FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash-lite"];
+const TOTAL_BUDGET_MS = 52000;
+const ATTEMPT_TIMEOUT_MS = 16000;
 
 const PROMPT = `You are a nutrition expert. Analyze the food in this image.
 - If the image does not contain food or drink, set isFood to false and fill other fields with zeros/empty strings.
@@ -46,12 +49,69 @@ const SCHEMA = {
   ],
 };
 
+function thinkingFallbacks(model) {
+  if (model.includes("2.5")) return [{ thinkingBudget: 0 }, { thinkingBudget: 128 }, undefined];
+  return [{ thinkingLevel: "minimal" }, { thinkingLevel: "low" }, undefined];
+}
+
+function parseGeminiJson(data) {
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.filter((p) => !p.thought).map((p) => p.text || "").join("");
+  if (!text) {
+    const why = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason || "unknown";
+    return { emptyReason: why };
+  }
+  const cleaned = text.replace(/```json|```/gi, "").trim();
+  return { parsed: JSON.parse(cleaned) };
+}
+
+async function callGemini({ model, apiKey, image, mimeType, timeoutMs }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const thinkingOptions = thinkingFallbacks(model);
+
+  for (let i = 0; i < thinkingOptions.length; i++) {
+    const generationConfig = {
+      responseMimeType: "application/json",
+      responseSchema: SCHEMA,
+      temperature: 0.3,
+      maxOutputTokens: 2048,
+    };
+    if (thinkingOptions[i] !== undefined) {
+      generationConfig.thinkingConfig = thinkingOptions[i];
+    }
+
+    const payload = {
+      contents: [{ role: "user", parts: [{ text: PROMPT }, { inlineData: { mimeType, data: image } }] }],
+      generationConfig,
+    };
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+
+      if (res.status === 400 && i < thinkingOptions.length - 1) {
+        const peek = await res.clone().text();
+        if (/think/i.test(peek)) continue;
+      }
+      return res;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 module.exports = async (req, res_) => {
   const json = (status, body) => res_.status(status).json(body);
 
   if (req.method !== "POST") return json(405, { error: "Method not allowed" });
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
   if (!apiKey) {
     return json(500, { error: "Server is missing GEMINI_API_KEY. Add it in Vercel environment variables and redeploy." });
   }
@@ -63,68 +123,79 @@ module.exports = async (req, res_) => {
   } catch {
     return json(400, { error: "Invalid request body." });
   }
-  if (!image || !mimeType) return json(400, { error: "No image received." });
+  if (typeof image !== "string" || typeof mimeType !== "string" || !image || !mimeType) {
+    return json(400, { error: "No image received." });
+  }
+  image = image.replace(/^data:[^;]+;base64,/, "").trim();
 
-  const generationConfig = {
-    responseMimeType: "application/json",
-    responseSchema: SCHEMA,
-    temperature: 0.3,
-    maxOutputTokens: 1000,
-  };
-  // Minimise "thinking" so responses stay fast.
-  const thinking = MODEL.includes("2.5") ? { thinkingBudget: 0 } : { thinkingLevel: "minimal" };
-  generationConfig.thinkingConfig = thinking;
+  const primaryModel = (process.env.GEMINI_MODEL || DEFAULT_MODEL).trim();
+  const distinctFallbacks = FALLBACK_MODELS.filter((m) => m !== primaryModel);
+  const attempts = [primaryModel, primaryModel, ...distinctFallbacks];
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
 
-  const payload = {
-    contents: [{ role: "user", parts: [{ text: PROMPT }, { inlineData: { mimeType, data: image } }] }],
-    generationConfig,
-  };
+  let lastStatus = 502;
+  let lastError = "The AI took too long to answer. Please tap Try again.";
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 25000);
+  for (let idx = 0; idx < attempts.length; idx++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 2000) break;
 
-  try {
-    const call = () => fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify(payload),
-      signal: ctrl.signal,
-    });
-    let res = await call();
-    if (res.status === 400) {
-      const peek = await res.clone().text();
-      if (/think/i.test(peek)) {          // thinking setting not accepted: retry without it
-        delete generationConfig.thinkingConfig;
-        res = await call();
+    const model = attempts[idx];
+    const timeoutMs = Math.min(ATTEMPT_TIMEOUT_MS, remaining);
+
+    try {
+      const res = await callGemini({ model, apiKey, image, mimeType, timeoutMs });
+      if (!res) continue;
+
+      if (!res.ok) {
+        const raw = await res.text();
+        let msg = raw;
+        try { msg = JSON.parse(raw)?.error?.message || raw; } catch {}
+        console.error("Gemini error", model, res.status, raw);
+
+        // Auth or malformed request errors won't be fixed by retrying or switching models.
+        if (res.status === 401 || res.status === 403 || res.status === 400) {
+          return json(502, {
+            error: `Google rejected the API key or request. (Google ${res.status}: ${String(msg).slice(0, 200)})`,
+          });
+        }
+
+        const friendly =
+          res.status === 429 ? "Too many requests or quota reached. Wait a minute and try again."
+          : res.status === 404 ? "The AI model name was not found."
+          : "The AI service had a problem.";
+        lastStatus = 502;
+        lastError = `${friendly} (Google ${res.status}: ${String(msg).slice(0, 200)})`;
+
+        // On 404, skip any duplicate attempts for the same missing model.
+        if (res.status === 404) {
+          while (idx + 1 < attempts.length && attempts[idx + 1] === model) idx++;
+        }
+        continue;
+      }
+
+      const data = await res.json();
+      const { parsed, emptyReason } = parseGeminiJson(data);
+      if (emptyReason) {
+        lastStatus = 502;
+        lastError = `The AI returned an empty answer (${emptyReason}). Try a clearer photo.`;
+        continue;
+      }
+      return json(200, parsed);
+    } catch (err) {
+      console.error("Attempt failed", model, err);
+      if (err.name === "AbortError") {
+        lastStatus = 504;
+        lastError = "The AI took too long to answer. Please tap Try again.";
+      } else if (err instanceof SyntaxError) {
+        lastStatus = 502;
+        lastError = "The AI returned an incomplete answer. Please tap Try again.";
+      } else {
+        lastStatus = 500;
+        lastError = `Server problem: ${String(err.message || err).slice(0, 150)}`;
       }
     }
-
-    if (!res.ok) {
-      const raw = await res.text();
-      let msg = raw;
-      try { msg = JSON.parse(raw)?.error?.message || raw; } catch {}
-      console.error("Gemini error", MODEL, res.status, raw);
-      const friendly =
-        res.status === 429 ? "Too many requests or quota reached. Wait a minute and try again."
-        : res.status === 401 || res.status === 403 || res.status === 400 ? "Google rejected the API key or request."
-        : res.status === 404 ? "The AI model name was not found."
-        : "The AI service had a problem.";
-      return json(502, { error: `${friendly} (Google ${res.status}: ${String(msg).slice(0, 200)})` });
-    }
-
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("");
-    if (!text) {
-      const why = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason || "unknown";
-      return json(502, { error: `The AI returned an empty answer (${why}). Try a clearer photo.` });
-    }
-    return json(200, JSON.parse(text.replace(/```json|```/g, "").trim()));
-  } catch (err) {
-    console.error(err);
-    if (err.name === "AbortError") return json(504, { error: "The AI took too long to answer. Please tap Try again." });
-    return json(500, { error: `Server problem: ${String(err.message || err).slice(0, 150)}` });
-  } finally {
-    clearTimeout(timer);
   }
+
+  return json(lastStatus, { error: lastError });
 };

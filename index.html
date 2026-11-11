@@ -145,7 +145,7 @@
   </main>
 
   <!-- Loading -->
-  <div id="loadingOverlay" class="hidden absolute inset-0 bg-white/85 backdrop-blur-sm z-20 flex flex-col items-center justify-center">
+  <div id="loadingOverlay" class="hidden fixed inset-0 mx-auto max-w-md bg-white/85 backdrop-blur-sm z-20 flex flex-col items-center justify-center">
     <div class="loader mb-4"></div>
     <h3 class="font-semibold text-lg text-gray-800">Analyzing food...</h3>
     <p id="loadingText" class="text-sm text-gray-500 text-center px-8 mt-2">Identifying your meal</p>
@@ -180,6 +180,11 @@
     const img = new Image();
     img.onload = () => {
       let { width: w, height: h } = img;
+      if (!w || !h) {
+        URL.revokeObjectURL(url);
+        showError("That image couldn't be decoded. Try a JPG or PNG photo.");
+        return;
+      }
       const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
       w = Math.round(w * scale); h = Math.round(h * scale);
       const canvas = document.createElement('canvas');
@@ -217,14 +222,19 @@
   els.reset.addEventListener('click', resetApp);
   $('againBtn').addEventListener('click', resetApp);
 
-  function showError(msg) { els.errorMsg.textContent = msg; show(els.errorBox); }
+  function showError(msg) {
+    els.errorMsg.textContent = msg;
+    show(els.errorBox);
+    els.errorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
   $('retryBtn').addEventListener('click', () => { hide(els.errorBox); if (current.base64) analyze(); });
 
   /* ---------- Analyze ---------- */
   els.analyze.addEventListener('click', analyze);
 
   async function analyze() {
-    if (!current.base64) return;
+    if (!current.base64 || els.analyze.disabled) return;
+    els.analyze.disabled = true;
     hide(els.errorBox); show(els.loading, true);
     const msgs = ['Identifying your meal', 'Estimating portion size', 'Calculating nutrition'];
     let i = 0;
@@ -246,12 +256,13 @@
       showError(err.message || 'Failed to analyze the image. Please try again.');
     } finally {
       clearInterval(timer); hide(els.loading);
+      els.analyze.disabled = false;
     }
   }
 
   async function fetchNutrition() {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 45000);
+    const t = setTimeout(() => ctrl.abort(), 65000);
     let res;
     try {
       res = await fetch(API_ENDPOINT, {
